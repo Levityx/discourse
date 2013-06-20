@@ -41,8 +41,8 @@ Discourse.Post = Discourse.Model.extend({
   }.property('post_number'),
 
   byTopicCreator: function() {
-    return this.get('topic.created_by.id') === this.get('user_id');
-  }.property('topic.created_by.id', 'user_id'),
+    return this.get('topic.details.created_by.id') === this.get('user_id');
+  }.property('topic.details.created_by.id', 'user_id'),
 
   hasHistory: function() {
     return this.get('version') > 1;
@@ -59,7 +59,7 @@ Discourse.Post = Discourse.Model.extend({
     result = 'read-icon';
     if (this.get('bookmarked')) return result + ' bookmarked';
     topic = this.get('topic');
-    if (topic && topic.get('last_read_post_number') === this.get('post_number')) {
+    if (topic && topic.get('postStream.last_read_post_number') === this.get('post_number')) {
       result += ' last-read';
     } else {
       if (this.get('read')) {
@@ -69,7 +69,7 @@ Discourse.Post = Discourse.Model.extend({
       }
     }
     return result;
-  }.property('read', 'topic.last_read_post_number', 'bookmarked'),
+  }.property('read', 'topic.postStream.last_read_post_number', 'bookmarked'),
 
   // Custom tooltips for the bookmark icons
   bookmarkTooltip: function() {
@@ -77,11 +77,11 @@ Discourse.Post = Discourse.Model.extend({
     if (this.get('bookmarked')) return Em.String.i18n('bookmarks.created');
     if (!this.get('read')) return "";
     topic = this.get('topic');
-    if (topic && topic.get('last_read_post_number') === this.get('post_number')) {
+    if (topic && topic.get('postStream.last_read_post_number') === this.get('post_number')) {
       return Em.String.i18n('bookmarks.last_read');
     }
     return Em.String.i18n('bookmarks.not_bookmarked');
-  }.property('read', 'topic.last_read_post_number', 'bookmarked'),
+  }.property('read', 'topic.postStream.last_read_post_number', 'bookmarked'),
 
   bookmarkedChanged: function() {
     var post = this;

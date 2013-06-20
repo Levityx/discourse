@@ -35,7 +35,7 @@ describe TopicView do
       # should not get the status post
       best = TopicView.new(topic.id, nil, best: 99)
       best.posts.count.should == 2
-      best.filtered_posts_count.should == 3
+      best.filtered_posts.size.should == 3
 
     end
 
@@ -129,12 +129,6 @@ describe TopicView do
       it 'returns the like' do
         PostAction.act(coding_horror, p1, PostActionType.types[:like])
         topic_view.all_post_actions[p1.id][PostActionType.types[:like]].should be_present
-      end
-    end
-
-    context '.post_action_visibility' do
-      it "is allows users to see likes" do
-        topic_view.post_action_visibility.include?(PostActionType.types[:like]).should be_true
       end
     end
 

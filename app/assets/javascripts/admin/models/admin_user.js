@@ -223,7 +223,6 @@ Discourse.AdminUser = Discourse.User.extend({
     if (model.get('loadedDetails')) { return; }
 
     Discourse.AdminUser.find(model.get('username_lower')).then(function (result) {
-      console.log("loaded details");
       model.setProperties(result);
       model.set('loadedDetails', true);
     });

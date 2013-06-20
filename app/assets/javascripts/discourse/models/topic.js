@@ -8,10 +8,13 @@
 **/
 Discourse.Topic = Discourse.Model.extend({
 
-  fewParticipants: function() {
-    if (!this.present('participants')) return null;
-    return this.get('participants').slice(0, 3);
-  }.property('participants'),
+  postStream: function() {
+    return Discourse.PostStream.create({topic: this});
+  }.property(),
+
+  details: function() {
+    return Discourse.TopicDetails.create({topic: this});
+  }.property(),
 
   canConvertToRegular: function() {
     var a = this.get('archetype');
@@ -34,8 +37,17 @@ Discourse.Topic = Discourse.Model.extend({
   }.property('id'),
 
   category: function() {
-    return Discourse.Category.list().findProperty('name', this.get('categoryName'));
-  }.property('categoryName'),
+    var categoryId = this.get('category_id');
+    if (categoryId) {
+      return Discourse.Category.list().findProperty('id', categoryId);
+    }
+
+    var categoryName = this.get('categoryName');
+    if (categoryName) {
+      return Discourse.Category.list().findProperty('name', categoryName);
+    }
+    return null;
+  }.property('category_id', 'categoryName'),
 
   shareUrl: function(){
     var user = Discourse.User.current();
@@ -60,12 +72,12 @@ Discourse.Topic = Discourse.Model.extend({
   },
 
   lastReadUrl: function() {
-    return this.urlForPostNumber(this.get('last_read_post_number'));
-  }.property('url', 'last_read_post_number'),
+    return this.urlForPostNumber(this.get('postStream.last_read_post_number'));
+  }.property('url', 'postStream.last_read_post_number'),
 
   lastPostUrl: function() {
-    return this.urlForPostNumber(this.get('highest_post_number'));
-  }.property('url', 'highest_post_number'),
+    return this.urlForPostNumber(this.get('postStream.highest_post_number'));
+  }.property('url', 'postStream.highest_post_number'),
 
   // The last post in the topic
   lastPost: function() {
@@ -93,7 +105,7 @@ Discourse.Topic = Discourse.Model.extend({
   displayNewPosts: function() {
     var delta, highestSeen, result;
     if (highestSeen = Discourse.get('highestSeenByTopic')[this.get('id')]) {
-      delta = highestSeen - this.get('last_read_post_number');
+      delta = highestSeen - this.get('postStream.last_read_post_number');
       if (delta > 0) {
         result = this.get('new_posts') - delta;
         if (result < 0) {
@@ -150,17 +162,6 @@ Discourse.Topic = Discourse.Model.extend({
     });
   },
 
-  removeAllowedUser: function(username) {
-    var allowedUsers = this.get('allowed_users');
-
-    return Discourse.ajax("/t/" + this.get('id') + "/remove-allowed-user", {
-      type: 'PUT',
-      data: { username: username }
-    }).then(function(){
-      allowedUsers.removeObject(allowedUsers.find(function(item){ return item.username === username; }));
-    });
-  },
-
   favoriteTooltipKey: (function() {
     return this.get('starred') ? 'favorite.help.unstar' : 'favorite.help.star';
   }).property('starred'),
@@ -190,7 +191,7 @@ Discourse.Topic = Discourse.Model.extend({
   // Save any changes we've made to the model
   save: function() {
     // Don't save unless we can
-    if (!this.get('can_edit')) return;
+    if (!this.get('details.can_edit')) return;
 
     return Discourse.ajax(this.get('url'), {
       type: 'PUT',
@@ -218,138 +219,67 @@ Discourse.Topic = Discourse.Model.extend({
     return Discourse.ajax("/t/" + (this.get('id')), { type: 'DELETE' });
   },
 
+  // Update our attributes from a JSON result
+  updateFromJson: function(json) {
+    this.get('details').updateFromJson(json.details);
+
+    var keys = Object.keys(json);
+    keys.removeObject('details');
+    keys.removeObject('post_stream');
+
+    var topic = this;
+    keys.forEach(function (key) {
+      topic.set(key, json[key]);
+    });
+  },
+
   // Load the posts for this topic
   loadPosts: function(opts) {
-    var topic = this;
 
-    if (!opts) opts = {};
+    // // If loading the topic succeeded...
+    // var afterTopicLoaded = function(result) {
 
-    // Load the first post by default
-    if ((!opts.bestOf) && (!opts.nearPost)) opts.nearPost = 1;
+    //   var closestPostNumber, postDiff;
+    //   // If we want to scroll to a post that doesn't exist, just pop them to the closest
+    //   // one instead. This is likely happening due to a deleted post.
+    //   opts.nearPost = parseInt(opts.nearPost, 10);
+    //   closestPostNumber = 0;
+    //   postDiff = Number.MAX_VALUE;
+    //   _.each(result.posts,function(p) {
+    //     var diff = Math.abs(p.post_number - opts.nearPost);
+    //     if (diff < postDiff) {
+    //       postDiff = diff;
+    //       closestPostNumber = p.post_number;
+    //       if (diff === 0) return false;
+    //     }
+    //   });
 
-    // If we already have that post in the DOM, jump to it. Return a promise
-    // that's already complete.
-    if (Discourse.TopicView.scrollTo(this.get('id'), opts.nearPost)) {
-      return Ember.Deferred.promise(function(promise) { promise.resolve(); });
-    }
+    //   opts.nearPost = closestPostNumber;
+    // };
 
-    // If loading the topic succeeded...
-    var afterTopicLoaded = function(result) {
+    // var errorLoadingTopic = function(result) {
 
-      var closestPostNumber, lastPost, postDiff;
+    //   topic.set('errorLoading', true);
 
-      // Update the slug if different
-      if (result.slug) topic.set('slug', result.slug);
+    //   // If the result was 404 the post is not found
+    //   if (result.status === 404) {
+    //     topic.set('errorTitle', Em.String.i18n('topic.not_found.title'));
+    //     topic.set('message', Em.String.i18n('topic.not_found.description'));
+    //     return;
+    //   }
 
-      // If we want to scroll to a post that doesn't exist, just pop them to the closest
-      // one instead. This is likely happening due to a deleted post.
-      opts.nearPost = parseInt(opts.nearPost, 10);
-      closestPostNumber = 0;
-      postDiff = Number.MAX_VALUE;
-      _.each(result.posts,function(p) {
-        var diff = Math.abs(p.post_number - opts.nearPost);
-        if (diff < postDiff) {
-          postDiff = diff;
-          closestPostNumber = p.post_number;
-          if (diff === 0) return false;
-        }
-      });
+    //   // If the result is 403 it means invalid access
+    //   if (result.status === 403) {
+    //     topic.set('errorTitle', Em.String.i18n('topic.invalid_access.title'));
+    //     topic.set('message', Em.String.i18n('topic.invalid_access.description'));
+    //     return;
+    //   }
 
-      opts.nearPost = closestPostNumber;
-      if (topic.get('participants')) {
-        topic.get('participants').clear();
-      }
-      if (result.suggested_topics) {
-        topic.set('suggested_topics', Em.A());
-      }
+    //   // Otherwise supply a generic error message
+    //   topic.set('errorTitle', Em.String.i18n('topic.server_error.title'));
+    //   topic.set('message', Em.String.i18n('topic.server_error.description'));
+    // };
 
-      topic.mergeAttributes(result, { suggested_topics: Discourse.Topic });
-      topic.set('posts', Em.A());
-      if (opts.trackVisit && result.draft && result.draft.length > 0) {
-        Discourse.openComposer({
-          draft: Discourse.Draft.getLocal(result.draft_key, result.draft),
-          draftKey: result.draft_key,
-          draftSequence: result.draft_sequence,
-          topic: topic,
-          ignoreIfChanged: true
-        });
-      }
-
-      // Okay this is weird, but let's store the length of the next post when there
-      lastPost = null;
-      _.each(result.posts,function(p) {
-        p.scrollToAfterInsert = opts.nearPost;
-        var post = Discourse.Post.create(p);
-        post.set('topic', topic);
-        topic.get('posts').pushObject(post);
-        lastPost = post;
-      });
-
-      topic.set('allowed_users', Em.A(result.allowed_users));
-      topic.set('loaded', true);
-    };
-
-    var errorLoadingTopic = function(result) {
-
-      topic.set('errorLoading', true);
-
-      // If the result was 404 the post is not found
-      if (result.status === 404) {
-        topic.set('errorTitle', Em.String.i18n('topic.not_found.title'));
-        topic.set('message', Em.String.i18n('topic.not_found.description'));
-        return;
-      }
-
-      // If the result is 403 it means invalid access
-      if (result.status === 403) {
-        topic.set('errorTitle', Em.String.i18n('topic.invalid_access.title'));
-        topic.set('message', Em.String.i18n('topic.invalid_access.description'));
-        return;
-      }
-
-      // Otherwise supply a generic error message
-      topic.set('errorTitle', Em.String.i18n('topic.server_error.title'));
-      topic.set('message', Em.String.i18n('topic.server_error.description'));
-    };
-
-    // Finally, call our find method
-    return Discourse.Topic.find(this.get('id'), {
-      nearPost: opts.nearPost,
-      bestOf: opts.bestOf,
-      trackVisit: opts.trackVisit
-    }).then(afterTopicLoaded, errorLoadingTopic);
-  },
-
-  notificationReasonText: function() {
-    var locale_string = "topic.notifications.reasons." + this.get('notification_level');
-    if (typeof this.get('notifications_reason_id') === 'number') {
-      locale_string += "_" + this.get('notifications_reason_id');
-    }
-    return Em.String.i18n(locale_string, { username: Discourse.User.current('username_lower') });
-  }.property('notification_level', 'notifications_reason_id'),
-
-  updateNotifications: function(v) {
-    this.set('notification_level', v);
-    this.set('notifications_reason_id', null);
-    return Discourse.ajax("/t/" + (this.get('id')) + "/notifications", {
-      type: 'POST',
-      data: { notification_level: v }
-    });
-  },
-
-  // use to add post to topics protecting from dupes
-  pushPosts: function(newPosts) {
-    var map, posts;
-    map = {};
-    posts = this.get('posts');
-    _.each(posts,function(post) {
-      map["" + post.post_number] = true;
-    });
-    _.each(newPosts,function(post) {
-      if (!map[post.get('post_number')]) {
-        posts.pushObject(post);
-      }
-    });
   },
 
   /**
@@ -395,8 +325,8 @@ Discourse.Topic = Discourse.Model.extend({
   }.property('excerpt'),
 
   canClearPin: function() {
-    return this.get('pinned') && (this.get('last_read_post_number') === this.get('highest_post_number'));
-  }.property('pinned', 'last_read_post_number', 'highest_post_number')
+    return this.get('pinned') && (this.get('postStream.last_read_post_number') === this.get('postStream.highest_post_number'));
+  }.property('pinned', 'postStream.last_read_post_number', 'postStream.highest_post_number')
 });
 
 Discourse.Topic.reopenClass({
@@ -422,8 +352,6 @@ Discourse.Topic.reopenClass({
   },
 
   // Load a topic, but accepts a set of filters
-  //  options:
-  //    onLoad - the callback after the topic is loaded
   find: function(topicId, opts) {
     var data, promise, url;
     url = Discourse.getURL("/t/") + topicId;
@@ -456,10 +384,12 @@ Discourse.Topic.reopenClass({
       data.best_of = true;
     }
 
-    // Check the preload store. If not, load it via JSON
-    return PreloadStore.getAndRemove("topic_" + topicId, function() {
+    var topicFinder = function() {
       return Discourse.ajax(url + ".json", {data: data});
-    }).then(function(result) {
+    };
+
+    // Check the preload store. If not, load it via JSON
+    return topicFinder().then(function(result) {
       var first = result.posts[0];
       if (first && opts && opts.bestOf) {
         first.bestOfFirst = true;
@@ -488,24 +418,6 @@ Discourse.Topic.reopenClass({
       promise.reject();
     });
     return promise;
-  },
-
-  create: function(obj, topicView) {
-    var result = this._super(obj);
-
-    if (result.participants) {
-      result.participants = _.map(result.participants,function(u) {
-        return Discourse.User.create(u);
-      });
-      result.fewParticipants = Em.A();
-      _.each(result.participants,function(p) {
-        // TODO should not be hardcoded
-        if (result.fewParticipants.length >= 8) return false;
-        result.fewParticipants.pushObject(p);
-      });
-    }
-
-    return result;
   }
 
 });

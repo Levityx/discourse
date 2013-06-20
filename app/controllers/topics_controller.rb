@@ -25,7 +25,7 @@ class TopicsController < ApplicationController
   caches_action :avatar, cache_path: Proc.new {|c| "#{c.params[:post_number]}-#{c.params[:topic_id]}" }
 
   def show
-    opts = params.slice(:username_filters, :best_of, :page, :post_number, :posts_before, :posts_after, :best)
+    opts = params.slice(:username_filters, :filter, :page, :post_number, :best)
     begin
       @topic_view = TopicView.new(params[:id] || params[:topic_id], current_user, opts)
     rescue Discourse::NotFound
@@ -44,6 +44,14 @@ class TopicsController < ApplicationController
     end
 
     canonical_url @topic_view.canonical_path
+  end
+
+  def posts
+    params.require(:topic_id)
+    params.require(:post_ids)
+
+    @topic_view = TopicView.new(params[:topic_id], current_user, post_ids: params[:post_ids])
+    render_json_dump(TopicViewPostsSerializer.new(@topic_view, scope: guardian, root: false))
   end
 
   def destroy_timings
